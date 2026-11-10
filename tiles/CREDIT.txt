@@ -1,0 +1,1 @@
+Sentinel-2 cloudless - https://s2maps.eu by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2016), CC BY 4.0 - https://creativecommons.org/licenses/by/4.0/
