@@ -3,16 +3,45 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <!-- the test copy stays out of search engines; the public site drops this line (docs/PRE-LAUNCH-PLAN.md) -->
     <meta name="robots" content="noindex" />
     <meta name="theme-color" content="#0d0d0d" />
-    <title>Green White Checkered</title>
-    <meta name="description" content="A daily NASCAR trivia game: five questions a day." />
+    <title>Green White Checkered — daily NASCAR trivia</title>
+    <meta
+      name="description"
+      content="Five NASCAR questions a day: who drove the car, what season, what number, which track and where the driver is from. Free, with a new set every day at 4 a.m. Eastern."
+    />
     <link rel="icon" href="gwc-icon-32.png" sizes="32x32" />
     <link rel="apple-touch-icon" href="gwc-icon-180.png" />
-    <script type="module" crossorigin src="./assets/index-GmC-UvTn.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-FFYK5DdZ.css">
+    <!-- the card a shared link shows on Facebook, X and in text messages; the image address must be absolute -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Green White Checkered" />
+    <meta property="og:title" content="Green White Checkered — daily NASCAR trivia" />
+    <meta property="og:description" content="Five NASCAR questions a day. How close can you get?" />
+    <meta property="og:url" content="https://gwctrivia.com/" />
+    <meta property="og:image" content="https://gwctrivia.com/logo.jpg" />
+    <meta property="og:image:width" content="520" />
+    <meta property="og:image:height" content="520" />
+    <meta property="og:image:alt" content="Green White Checkered daily trivia" />
+    <meta name="twitter:card" content="summary" />
+    <script type="module" crossorigin src="./assets/index-JYJ3yJKA.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-WjJeWABq.css">
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- what search engines read without running the game; the game replaces it as it starts -->
+      <main class="intro">
+        <h1>Green White Checkered: daily NASCAR trivia</h1>
+        <p>
+          Five questions a day about NASCAR drivers and their cars: who drove the car in the photo, what season it is
+          from, what number it carried, which track a win came at, and where the driver is from. Close answers still
+          score, up to 1,000 points a day, and a new set comes out every day at 4 a.m. Eastern.
+        </p>
+        <p>
+          Facts come from Wikipedia and Wikidata, or the gwctrivia.com team's independent research, and photos from
+          Wikimedia Commons. Not affiliated with or endorsed by NASCAR, its teams, drivers or sponsors.
+        </p>
+      </main>
+    </div>
   </body>
 </html>
