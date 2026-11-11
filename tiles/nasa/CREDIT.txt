@@ -1,0 +1,1 @@
+Blue Marble Next Generation: NASA Earth Observatory, public domain, as served by NASA GIBS. Repacked by gwctrivia.com into 512-pixel WebP tiles (scripts/phase5_pack_tiles.py).
