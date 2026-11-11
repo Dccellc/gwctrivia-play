@@ -10,6 +10,10 @@
  * `daily`, one row a game day. Nothing else is kept: no cookie, no ID, and the internet address is never stored. The
  * Privacy page (site/src/App.tsx) says exactly this; change it the day this changes.
  *
+ * Since 11 November 2026 it also counts the results screen's two buttons (Chris: "Track both buttons on analytics- copied
+ * and share buttons"): game.ts countPress sends { button: "share" | "copy" } to /api/pressed, once a day for each from
+ * each device, and this adds one to that day's `shared` or `copied`.
+ *
  * Read the totals in Cloudflare: Storage & databases → D1 SQL database → gwctrivia-counts → the `daily` table.
  */
 
@@ -20,6 +24,7 @@ const BACK = {
   "this-week": "back_within_a_week",
   longer: "back_after_longer",
 };
+const BUTTON = { share: "shared", copy: "copied" };
 
 // made the first time a note arrives, if it is not there yet
 const SCHEMA = `CREATE TABLE IF NOT EXISTS daily (
@@ -29,8 +34,40 @@ const SCHEMA = `CREATE TABLE IF NOT EXISTS daily (
   new_players INTEGER NOT NULL DEFAULT 0,
   back_from_yesterday INTEGER NOT NULL DEFAULT 0,
   back_within_a_week INTEGER NOT NULL DEFAULT 0,
-  back_after_longer INTEGER NOT NULL DEFAULT 0
+  back_after_longer INTEGER NOT NULL DEFAULT 0,
+  shared INTEGER NOT NULL DEFAULT 0,
+  copied INTEGER NOT NULL DEFAULT 0
 )`;
+// columns added after the table was first made, added to a table that lacks them
+const ADDED = ["shared", "copied"];
+
+/** Runs one count; makes the table, or adds a missing column, the first time it is needed, and tries once more. */
+async function run(env, statement) {
+  try {
+    await statement.run();
+  } catch (e) {
+    const why = String(e);
+    if (/no such table/i.test(why)) await env.DB.prepare(SCHEMA).run();
+    else if (/no such column|has no column/i.test(why)) {
+      for (const c of ADDED) {
+        await env.DB.prepare(`ALTER TABLE daily ADD COLUMN ${c} INTEGER NOT NULL DEFAULT 0`).run().catch(() => {});
+      }
+    } else throw e;
+    await statement.run();
+  }
+}
+
+/** The note's one field, when the note is short, well formed and names one of `allowed`; null otherwise. */
+async function noteField(request, field, allowed) {
+  try {
+    const text = await request.text();
+    if (text.length > 200) return null;
+    const value = JSON.parse(text)[field];
+    return typeof value === "string" && Object.hasOwn(allowed, value) ? value : null;
+  } catch {
+    return null;
+  }
+}
 
 /** The game's date, as game.ts reckons it: US Eastern, turning over at 4 a.m. */
 function gameDate(now = new Date()) {
@@ -59,36 +96,36 @@ export default {
     // gwctrivia.com/analytics (src/Analytics.tsx) with a slash after it would read its scripts from /analytics/assets/,
     // which do not exist; the page's one address is /analytics
     if (url.pathname.startsWith("/analytics/")) return Response.redirect(`${url.origin}/analytics`, 301);
-    if (url.pathname !== "/api/played") return env.ASSETS.fetch(request);
+    if (url.pathname !== "/api/played" && url.pathname !== "/api/pressed") return env.ASSETS.fetch(request);
     if (request.method !== "POST") return answer(405);
     // a browser on any other site may not add to the count
     const origin = request.headers.get("origin");
     if (origin && origin !== "https://gwctrivia.com") return answer(403);
-
-    let back;
-    try {
-      const text = await request.text();
-      if (text.length > 200) return answer(413);
-      back = JSON.parse(text).back;
-    } catch {
-      return answer(400);
-    }
-    if (typeof back !== "string" || !Object.hasOwn(BACK, back)) return answer(400);
     if (!env.DB) return answer(503);
 
-    const column = BACK[back];
-    const returning = back === "new" ? 0 : 1;
-    const add = env.DB.prepare(
-      `INSERT INTO daily (date, players, returning_players, ${column}) VALUES (?1, 1, ?2, 1)
-       ON CONFLICT(date) DO UPDATE SET players = players + 1,
-         returning_players = returning_players + ?2, ${column} = ${column} + 1`,
-    ).bind(gameDate(), returning);
+    let add;
+    if (url.pathname === "/api/played") {
+      const back = await noteField(request, "back", BACK);
+      if (!back) return answer(400);
+      const column = BACK[back];
+      add = env.DB.prepare(
+        `INSERT INTO daily (date, players, returning_players, ${column}) VALUES (?1, 1, ?2, 1)
+         ON CONFLICT(date) DO UPDATE SET players = players + 1,
+           returning_players = returning_players + ?2, ${column} = ${column} + 1`,
+      ).bind(gameDate(), back === "new" ? 0 : 1);
+    } else {
+      const button = await noteField(request, "button", BUTTON);
+      if (!button) return answer(400);
+      const column = BUTTON[button];
+      add = env.DB.prepare(
+        `INSERT INTO daily (date, ${column}) VALUES (?1, 1)
+         ON CONFLICT(date) DO UPDATE SET ${column} = ${column} + 1`,
+      ).bind(gameDate());
+    }
     try {
-      await add.run();
-    } catch (e) {
-      if (!/no such table/i.test(String(e))) return answer(500);
-      await env.DB.prepare(SCHEMA).run();
-      await add.run();
+      await run(env, add);
+    } catch {
+      return answer(500);
     }
     return answer(204);
   },
