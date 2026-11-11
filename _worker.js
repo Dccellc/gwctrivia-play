@@ -1,7 +1,8 @@
 /**
  * gwctrivia.com's daily count (Chris, 10 November 2026: "i want to know daily players and returning players").
  *
- * Cloudflare Pages runs this file for /api/* only (_routes.json beside it); every other file is served as it is.
+ * Cloudflare Pages runs this file for /api/* and /analytics/* only (_routes.json beside it); every other file is served
+ * as it is.
  * scripts/publish-test.sh copies both files into the live branch, never into the test copy.
  *
  * The game sends one note a day from each device, on its first answer (site/src/game.ts countPlay): how long since that
@@ -55,6 +56,9 @@ const answer = (status) => new Response(null, { status, headers: { "cache-contro
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    // gwctrivia.com/analytics (src/Analytics.tsx) with a slash after it would read its scripts from /analytics/assets/,
+    // which do not exist; the page's one address is /analytics
+    if (url.pathname.startsWith("/analytics/")) return Response.redirect(`${url.origin}/analytics`, 301);
     if (url.pathname !== "/api/played") return env.ASSETS.fetch(request);
     if (request.method !== "POST") return answer(405);
     // a browser on any other site may not add to the count
