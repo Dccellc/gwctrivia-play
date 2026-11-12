@@ -12,7 +12,9 @@
  *
  * Since 11 November 2026 it also counts the results screen's two buttons (Chris: "Track both buttons on analytics- copied
  * and share buttons"): game.ts countPress sends { button: "share" | "copy" } to /api/pressed, once a day for each from
- * each device, and this adds one to that day's `shared` or `copied`.
+ * each device, and this adds one to that day's `shared` or `copied`. The same day it began counting the On This Day tab
+ * (Chris: "can we all clicks on 'on this day' to the cloudfare analytics"): { button: "otd" }, once a day from each
+ * device, adds one to `on_this_day`.
  *
  * Read the totals in Cloudflare: Storage & databases → D1 SQL database → gwctrivia-counts → the `daily` table.
  */
@@ -24,7 +26,7 @@ const BACK = {
   "this-week": "back_within_a_week",
   longer: "back_after_longer",
 };
-const BUTTON = { share: "shared", copy: "copied" };
+const BUTTON = { share: "shared", copy: "copied", otd: "on_this_day" };
 
 // made the first time a note arrives, if it is not there yet
 const SCHEMA = `CREATE TABLE IF NOT EXISTS daily (
@@ -36,10 +38,11 @@ const SCHEMA = `CREATE TABLE IF NOT EXISTS daily (
   back_within_a_week INTEGER NOT NULL DEFAULT 0,
   back_after_longer INTEGER NOT NULL DEFAULT 0,
   shared INTEGER NOT NULL DEFAULT 0,
-  copied INTEGER NOT NULL DEFAULT 0
+  copied INTEGER NOT NULL DEFAULT 0,
+  on_this_day INTEGER NOT NULL DEFAULT 0
 )`;
 // columns added after the table was first made, added to a table that lacks them
-const ADDED = ["shared", "copied"];
+const ADDED = ["shared", "copied", "on_this_day"];
 
 /** Runs one count; makes the table, or adds a missing column, the first time it is needed, and tries once more. */
 async function run(env, statement) {
