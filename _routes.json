@@ -1,5 +1,5 @@
 {
   "version": 1,
-  "include": ["/api/*", "/analytics/*"],
-  "exclude": []
+  "include": ["/api/*", "/analytics/*", "/days/*"],
+  "exclude": ["/days/index.bin", "/days/credits.bin", "/days/held.json"]
 }
