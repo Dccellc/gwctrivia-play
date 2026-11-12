@@ -15,6 +15,8 @@
  * each device, and this adds one to that day's `shared` or `copied`. The same day it began counting the On This Day tab
  * (Chris: "can we all clicks on 'on this day' to the cloudfare analytics"): { button: "otd" }, once a day from each
  * device, adds one to `on_this_day`.
+ * Since 12 November 2026 the results screen's two picture buttons (the picture share card, src/shareCard.ts) send
+ * { button: "picture" }, once a day from each device, which adds one to `pictured`.
  *
  * Since 12 November 2026 it also puts each day's set up at 4 a.m. by itself (Chris, after GitHub never started the
  * 4 a.m. job that morning: "You start the job now and create the fix"). Every later day waits, sealed as the site seals
@@ -41,7 +43,7 @@ const BACK = {
   "this-week": "back_within_a_week",
   longer: "back_after_longer",
 };
-const BUTTON = { share: "shared", copy: "copied", otd: "on_this_day" };
+const BUTTON = { share: "shared", copy: "copied", otd: "on_this_day", picture: "pictured" };
 
 // made the first time a note arrives, if it is not there yet
 const SCHEMA = `CREATE TABLE IF NOT EXISTS daily (
@@ -54,10 +56,11 @@ const SCHEMA = `CREATE TABLE IF NOT EXISTS daily (
   back_after_longer INTEGER NOT NULL DEFAULT 0,
   shared INTEGER NOT NULL DEFAULT 0,
   copied INTEGER NOT NULL DEFAULT 0,
-  on_this_day INTEGER NOT NULL DEFAULT 0
+  on_this_day INTEGER NOT NULL DEFAULT 0,
+  pictured INTEGER NOT NULL DEFAULT 0
 )`;
 // columns added after the table was first made, added to a table that lacks them
-const ADDED = ["shared", "copied", "on_this_day"];
+const ADDED = ["shared", "copied", "on_this_day", "pictured"];
 
 /** Runs one count; makes the table, or adds a missing column, the first time it is needed, and tries once more. */
 async function run(env, statement) {
