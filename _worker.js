@@ -17,6 +17,11 @@
  * device, adds one to `on_this_day`.
  *
  * Read the totals in Cloudflare: Storage & databases → D1 SQL database → gwctrivia-counts → the `daily` table.
+ *
+ * Or at gwctrivia.com/analytics (src/AnalyticsDashboard.tsx; Chris, 11 November 2026: "Yes, build it", after asking for
+ * graphs and monthly totals): that page POSTs { key } to /api/counts and gets every row of `daily` back. The key is a
+ * random 64-character string kept only in site/analytics-page.json, which reaches the browser sealed under the site's
+ * password (analytics.json); this file holds only its SHA-256, so reading this file does not give the counts away.
  */
 
 // what the note says → the column it adds one to (a fixed list: nothing a player sends ever becomes SQL)
@@ -93,18 +98,60 @@ function gameDate(now = new Date()) {
 
 const answer = (status) => new Response(null, { status, headers: { "cache-control": "no-store" } });
 
+// SHA-256 of analytics-page.json's countsKey (see the note at the top)
+const COUNTS_KEY_SHA256 = "cbbca4b043666333ab300bec8a06b9564ee35e97905138a2ab4dcf829eabec7f";
+
+/** True when the note carries the counts key. Compares the key's hash, every character, whatever matches first. */
+async function holdsCountsKey(request) {
+  try {
+    const text = await request.text();
+    if (text.length > 200) return false;
+    const key = JSON.parse(text).key;
+    if (typeof key !== "string" || !/^[0-9a-f]{64}$/.test(key)) return false;
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
+    const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+    let differ = 0;
+    for (let i = 0; i < hex.length; i++) differ |= hex.charCodeAt(i) ^ COUNTS_KEY_SHA256.charCodeAt(i);
+    return differ === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Every row of `daily`, oldest first, and the game's date today. No table yet: no rows. */
+async function readCounts(env) {
+  let rows = [];
+  try {
+    rows = (await env.DB.prepare("SELECT * FROM daily ORDER BY date").all()).results ?? [];
+  } catch (e) {
+    if (!/no such table/i.test(String(e))) throw e;
+  }
+  return new Response(JSON.stringify({ today: gameDate(), rows }), {
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     // gwctrivia.com/analytics (src/Analytics.tsx) with a slash after it would read its scripts from /analytics/assets/,
     // which do not exist; the page's one address is /analytics
     if (url.pathname.startsWith("/analytics/")) return Response.redirect(`${url.origin}/analytics`, 301);
-    if (url.pathname !== "/api/played" && url.pathname !== "/api/pressed") return env.ASSETS.fetch(request);
+    const counts = url.pathname === "/api/counts";
+    if (!counts && url.pathname !== "/api/played" && url.pathname !== "/api/pressed") return env.ASSETS.fetch(request);
     if (request.method !== "POST") return answer(405);
-    // a browser on any other site may not add to the count
+    // a browser on any other site may not add to the count, or read it
     const origin = request.headers.get("origin");
     if (origin && origin !== "https://gwctrivia.com") return answer(403);
     if (!env.DB) return answer(503);
+    if (counts) {
+      if (!(await holdsCountsKey(request))) return answer(403);
+      try {
+        return await readCounts(env);
+      } catch {
+        return answer(500);
+      }
+    }
 
     let add;
     if (url.pathname === "/api/played") {
