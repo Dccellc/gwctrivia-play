@@ -10,6 +10,13 @@
  * `daily`, one row a game day. Nothing else is kept: no cookie, no ID, and the internet address is never stored. The
  * Privacy page (site/src/App.tsx) says exactly this; change it the day this changes.
  *
+ * Since 16 November 2026 it also adds up each question's score (Chris: "Is it possible to take stats on questions each
+ * day to see the average score per question to post results after a day is done", then "Yes"): game.ts countScore sends
+ * { q, score, date } to /api/scored once a device locks in an answer to that day's game, q 1 to 5 with its score 0 to
+ * 100, and q 0 with the day's total, 0 to 1,000, once the fifth is in; once a question a day from each device. This
+ * adds it to the table `question_scores`, one row a day and question: how many answered, the points added up, and how
+ * many scored the most there is. Not the answer given, and nothing that ties one question's note to another's.
+ *
  * Since 11 November 2026 it also counts the results screen's two buttons (Chris: "Track both buttons on analytics- copied
  * and share buttons"): game.ts countPress sends { button: "share" | "copy" } to /api/pressed, once a day for each from
  * each device, and this adds one to that day's `shared` or `copied`. The same day it began counting the On This Day tab
@@ -75,6 +82,35 @@ async function run(env, statement) {
       }
     } else throw e;
     await statement.run();
+  }
+}
+
+// each question's scores, one row a game day and question (q 0 is the day's total out of 1,000)
+const SCORES_SCHEMA = `CREATE TABLE IF NOT EXISTS question_scores (
+  date TEXT NOT NULL,
+  question INTEGER NOT NULL,
+  answers INTEGER NOT NULL DEFAULT 0,
+  points INTEGER NOT NULL DEFAULT 0,
+  perfect INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (date, question)
+)`;
+
+/** A score note, when it is short and well formed: q 1-5 with a whole score 0-100, or q 0 with the day's total 0-1000,
+ * and the game date it was played for, which must be today's or yesterday's (a game begun before 4 a.m.). */
+async function scoreNote(request, now = new Date()) {
+  try {
+    const text = await request.text();
+    if (text.length > 200) return null;
+    const { q, score, date } = JSON.parse(text);
+    if (!Number.isInteger(q) || q < 0 || q > 5 || !Number.isInteger(score)) return null;
+    const most = q === 0 ? 1000 : 100;
+    if (score < 0 || score > most) return null;
+    const today = gameDate(now);
+    const yesterday = new Date(Date.parse(today) - 86_400_000).toISOString().slice(0, 10);
+    if (date !== today && date !== yesterday) return null;
+    return { q, score, date, perfect: score === most ? 1 : 0 };
+  } catch {
+    return null;
   }
 }
 
@@ -246,7 +282,13 @@ async function readCounts(env) {
   } catch (e) {
     if (!/no such table/i.test(String(e))) throw e;
   }
-  return new Response(JSON.stringify({ today: gameDate(), rows }), {
+  let scores = [];
+  try {
+    scores = (await env.DB.prepare("SELECT * FROM question_scores ORDER BY date, question").all()).results ?? [];
+  } catch (e) {
+    if (!/no such table/i.test(String(e))) throw e;
+  }
+  return new Response(JSON.stringify({ today: gameDate(), rows, scores }), {
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
 }
@@ -275,7 +317,7 @@ export default {
       return request.method === "POST" ? holdDay(request, env, Number(dayApi[1])) : answer(405);
     }
     const counts = url.pathname === "/api/counts";
-    if (!counts && url.pathname !== "/api/played" && url.pathname !== "/api/pressed") return env.ASSETS.fetch(request);
+    if (!counts && !["/api/played", "/api/pressed", "/api/scored"].includes(url.pathname)) return env.ASSETS.fetch(request);
     if (request.method !== "POST") return answer(405);
     // a browser on any other site may not add to the count, or read it
     const origin = request.headers.get("origin");
@@ -288,6 +330,27 @@ export default {
       } catch {
         return answer(500);
       }
+    }
+
+    if (url.pathname === "/api/scored") {
+      const n = await scoreNote(request);
+      if (!n) return answer(400);
+      const add = env.DB.prepare(
+        `INSERT INTO question_scores (date, question, answers, points, perfect) VALUES (?1, ?2, 1, ?3, ?4)
+         ON CONFLICT(date, question) DO UPDATE SET answers = answers + 1, points = points + ?3, perfect = perfect + ?4`,
+      ).bind(n.date, n.q, n.score, n.perfect);
+      try {
+        try {
+          await add.run();
+        } catch (e) {
+          if (!/no such table/i.test(String(e))) throw e;
+          await env.DB.prepare(SCORES_SCHEMA).run();
+          await add.run();
+        }
+      } catch {
+        return answer(500);
+      }
+      return answer(204);
     }
 
     let add;
