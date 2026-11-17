@@ -19,6 +19,14 @@
  * adds it to the table `question_scores`, one row a day and question: how many answered, the points added up, and how
  * many scored the most there is. Not the answer given, and nothing that ties one question's note to another's.
  *
+ * Since 17 November 2026 the day's total (q 0) also adds one to that day's row of `score_bands`, the band of 50 points
+ * its total falls in (0 to 49 is band 0, up to band 19 for 950 to 1,000), which draws the curve of everyone's totals on
+ * the game's stats (Chris: "maptap give stats on its page through a dropdown menu on the top left ... can we do that?",
+ * then "Yes, build it"). GET /api/today?date= answers anyone with that day's totals, never anyone's own: players so far,
+ * games finished, the average total, perfect games, each question's average and share of 100s, and the bands. The date
+ * may be today's or yesterday's game date only, and each answer is kept a minute (Cloudflare's cache), so a crowd
+ * reading it asks the database about once a minute.
+ *
  * Since 11 November 2026 it also counts the results screen's two buttons (Chris: "Track both buttons on analytics- copied
  * and share buttons"): game.ts countPress sends { button: "share" | "copy" } to /api/pressed, once a day for each from
  * each device, and this adds one to that day's `shared` or `copied`. The same day it began counting the On This Day tab
@@ -96,6 +104,61 @@ const SCORES_SCHEMA = `CREATE TABLE IF NOT EXISTS question_scores (
   perfect INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (date, question)
 )`;
+
+// how many players' day totals fell in each band of 50 points, one row a game day and band
+const BANDS_SCHEMA = `CREATE TABLE IF NOT EXISTS score_bands (
+  date TEXT NOT NULL,
+  band INTEGER NOT NULL,
+  players INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (date, band)
+)`;
+const BAND = 50;
+const BANDS = 20; // 1,000 itself goes in the last band, with 950 to 999
+
+/** GET /api/today?date=: everyone's totals for today's game date, or yesterday's when asked, as JSON. */
+async function todayStats(request, env, url) {
+  const today = gameDate();
+  const yesterday = new Date(Date.parse(today) - 86_400_000).toISOString().slice(0, 10);
+  const date = url.searchParams.get("date") === yesterday ? yesterday : today;
+  const key = new Request(`${url.origin}/api/today?date=${date}`);
+  const cache = typeof caches !== "undefined" ? caches.default : null;
+  const hit = cache && (await cache.match(key).catch(() => null));
+  if (hit) return hit;
+  // a table not made yet reads as no rows
+  const rows = async (sql) => {
+    try {
+      return (await env.DB.prepare(sql).bind(date).all()).results ?? [];
+    } catch {
+      return [];
+    }
+  };
+  const daily = await rows("SELECT players FROM daily WHERE date = ?1");
+  const qs = await rows("SELECT question, answers, points, perfect FROM question_scores WHERE date = ?1");
+  const bandRows = await rows("SELECT band, players FROM score_bands WHERE date = ?1");
+  const byQ = new Map(qs.map((r) => [r.question, r]));
+  const day = byQ.get(0);
+  const bands = Array(BANDS).fill(0);
+  for (const r of bandRows) if (r.band >= 0 && r.band < BANDS) bands[r.band] = r.players;
+  const body = {
+    date,
+    players: daily[0]?.players ?? 0,
+    finished: day?.answers ?? 0,
+    average: day?.answers ? Math.round(day.points / day.answers) : null,
+    perfect: day?.perfect ?? 0,
+    questions: [1, 2, 3, 4, 5].map((q) => {
+      const r = byQ.get(q);
+      return r?.answers
+        ? { answers: r.answers, average: Math.round(r.points / r.answers), perfectShare: Math.round((100 * r.perfect) / r.answers) }
+        : { answers: 0, average: null, perfectShare: null };
+    }),
+    bands,
+  };
+  const res = new Response(JSON.stringify(body), {
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=60" },
+  });
+  if (cache) await cache.put(key, res.clone()).catch(() => {});
+  return res;
+}
 
 /** A score note, when it is short and well formed: q 1-5 with a whole score 0-100, or q 0 with the day's total 0-1000,
  * and the game date it was played for, which must be today's or yesterday's (a game begun before 4 a.m.). */
@@ -308,6 +371,15 @@ export default {
       }
       return request.method === "POST" ? holdDay(request, env, Number(dayApi[1])) : answer(405);
     }
+    if (url.pathname === "/api/today") {
+      if (request.method !== "GET") return answer(405);
+      if (!env.DB) return answer(503);
+      try {
+        return await todayStats(request, env, url);
+      } catch {
+        return answer(500);
+      }
+    }
     const counts = url.pathname === "/api/counts";
     if (!counts && !["/api/played", "/api/pressed", "/api/scored"].includes(url.pathname)) return env.ASSETS.fetch(request);
     if (request.method !== "POST") return answer(405);
@@ -341,6 +413,24 @@ export default {
         }
       } catch {
         return answer(500);
+      }
+      // the day's total also counts in its band of 50 points, for the curve of everyone's totals
+      if (n.q === 0) {
+        const band = env.DB.prepare(
+          `INSERT INTO score_bands (date, band, players) VALUES (?1, ?2, 1)
+           ON CONFLICT(date, band) DO UPDATE SET players = players + 1`,
+        ).bind(n.date, Math.min(BANDS - 1, Math.floor(n.score / BAND)));
+        try {
+          try {
+            await band.run();
+          } catch (e) {
+            if (!/no such table/i.test(String(e))) throw e;
+            await env.DB.prepare(BANDS_SCHEMA).run();
+            await band.run();
+          }
+        } catch {
+          /* the question totals are in; only the curve misses this one */
+        }
       }
       return answer(204);
     }
