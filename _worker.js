@@ -1,8 +1,10 @@
 /**
  * gwctrivia.com's daily count (Chris, 10 November 2026: "i want to know daily players and returning players").
  *
- * Cloudflare Pages runs this file for /api/*, /analytics/* and the day files only (_routes.json beside it); every other
- * file is served as it is.
+ * Cloudflare Pages runs this file for /api/* and /analytics/* only (_routes.json beside it); every other file, the day
+ * files included, is served as it is. Since 17 November 2026 the day files no longer come through here (Chris, asking
+ * whether the site is ready for thousands of players at once): the free plan allows this file 100,000 requests a day,
+ * about 10,000 players, and past that the game could not have loaded its day. A plain file has no such limit.
  * scripts/publish-test.sh copies both files into the live branch, never into the test copy.
  *
  * The game sends one note a day from each device, on its first answer (site/src/game.ts countPlay): how long since that
@@ -28,9 +30,9 @@
  * Since 12 November 2026 it also puts each day's set up at 4 a.m. by itself (Chris, after GitHub never started the
  * 4 a.m. job that morning: "You start the job now and create the fix"). Every later day waits, sealed as the site seals
  * it, in the same D1 database, table `held_days`; days/held.json on the site names each one's SHA-256 and day 1's date.
- * A request for days/N.bin comes here (_routes.json): the site's own file when it has one, otherwise, once day N's
- * 4 a.m. Eastern has come, the held copy whose hash matches the list. Before then, or when no matching copy is stored,
- * the answer is the site's own page, as it always was, and the game shows "New set loading". scripts/publish-test.sh
+ * When days/N.bin is not on the site, the game asks GET /api/day/N (src/lock.ts readData): once day N's 4 a.m. Eastern
+ * has come, the held copy whose hash matches the list. Before then, or when no matching copy is stored, the answer is
+ * a 404, and the game shows "New set loading". scripts/publish-test.sh
  * stores the held days through /api/day/N after each publish (scripts/upload-held-days.mjs); a copy is taken only when
  * its hash is on the list, so nothing else can be stored, and nothing is ever read back before its day. The 4 a.m. job
  * (.github/workflows/daily-publish.yml) still copies each day onto the site too; either one is enough.
@@ -193,21 +195,13 @@ async function storedDay(env, n, want) {
   return (await sha256(body)) === want ? body : null;
 }
 
-/** days/N.bin: the site's own file, or after day N's 4 a.m. the held copy, or else the site's own answer. */
-async function serveDay(request, env, n) {
-  const site = await env.ASSETS.fetch(request);
-  if ((site.ok && !isPage(site)) || !env.DB) return site;
-  try {
-    const list = await heldList(request, env);
-    if (!list || n > dayNumber(list.firstDate)) return site;
-    const body = await storedDay(env, n, list.days[n]);
-    if (!body) return site;
-    return new Response(body, {
-      headers: { "content-type": "application/octet-stream", "cache-control": "public, max-age=0, must-revalidate" },
-    });
-  } catch {
-    return site;
-  }
+/** GET /api/day/N: day N's held copy, once its 4 a.m. has come and only when its hash is the one the list names. */
+async function serveHeld(request, env, n) {
+  const list = await heldList(request, env);
+  if (!list || n > dayNumber(list.firstDate)) return answer(404);
+  const body = await storedDay(env, n, list.days[n]);
+  if (!body) return answer(404);
+  return new Response(body, { headers: { "content-type": "application/octet-stream", "cache-control": "no-store" } });
 }
 
 /** POST /api/day/N with day N's sealed file: stored only when its hash is the one days/held.json names for day N. */
@@ -299,21 +293,19 @@ export default {
     // gwctrivia.com/analytics (src/Analytics.tsx) with a slash after it would read its scripts from /analytics/assets/,
     // which do not exist; the page's one address is /analytics
     if (url.pathname.startsWith("/analytics/")) return Response.redirect(`${url.origin}/analytics`, 301);
-    const dayFile = url.pathname.match(/^\/days\/(\d{1,4})\.bin$/);
-    if (dayFile) {
-      try {
-        return await serveDay(request, env, Number(dayFile[1]));
-      } catch {
-        return env.ASSETS.fetch(request);
-      }
-    }
-    if (url.pathname.startsWith("/days/")) return env.ASSETS.fetch(request);
     const dayApi = url.pathname.match(/^\/api\/day\/(\d{1,4})$/);
     if (dayApi || url.pathname === "/api/held-status") {
       const origin = request.headers.get("origin");
       if (origin && origin !== "https://gwctrivia.com") return answer(403);
       if (!env.DB) return answer(503);
       if (!dayApi) return request.method === "GET" ? heldStatus(request, env) : answer(405);
+      if (request.method === "GET") {
+        try {
+          return await serveHeld(request, env, Number(dayApi[1]));
+        } catch {
+          return answer(500);
+        }
+      }
       return request.method === "POST" ? holdDay(request, env, Number(dayApi[1])) : answer(405);
     }
     const counts = url.pathname === "/api/counts";

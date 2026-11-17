@@ -1,0 +1,18 @@
+# gwctrivia.com's caching (Cloudflare Pages reads this file; scripts/publish-test.sh copies it beside _worker.js).
+# 17 November 2026, Chris asking whether the map loads fast enough: what never changes is kept on the phone, so a player
+# coming back the next day opens the map from the phone instead of checking every file again. The page itself, lock.json
+# and the day files are not listed: they are checked with the site every time, so a new day or a publish shows at once.
+
+# the scripts and styles: each publish names them anew, so a name never changes what it holds
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# the photos: named by their content (scripts/package-private.mjs)
+/photos/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# the map's tiles and lettering; tiles/index.json, the list of tiles, is fetched with no-cache (src/MapView.tsx)
+/tiles/*
+  Cache-Control: public, max-age=2592000
+/fonts/*
+  Cache-Control: public, max-age=2592000
