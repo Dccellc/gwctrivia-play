@@ -13,12 +13,10 @@
     />
     <link rel="icon" href="gwc-icon-32.png" sizes="32x32" />
     <link rel="apple-touch-icon" href="gwc-icon-180.png" />
-    <!-- added to a phone's home screen, the game opens full screen under its own icon and name (Chris, 12 November 2026) -->
-    <link rel="manifest" href="manifest.webmanifest" />
-    <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-title" content="GWC Trivia" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <!-- no home-screen app: the game is played in the browser only, and offers no way to install it (Chris, 18 November
+         2026: "Just get rid of the play it like an app box all together never give them the choice to do that"). With no
+         manifest Chrome makes no install offer, and a bookmark added to an iPhone's home screen opens the game in Safari,
+         with the player's saved days, never a separate copy -->
     <!-- the card a shared link shows on Facebook, X and in text messages; the image address must be absolute -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Green White Checkered" />
@@ -30,8 +28,8 @@
     <meta property="og:image:height" content="520" />
     <meta property="og:image:alt" content="Green White Checkered daily trivia" />
     <meta name="twitter:card" content="summary" />
-    <script type="module" crossorigin src="./assets/index-DJ1VzT3u.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-CHdhu5sj.css">
+    <script type="module" crossorigin src="./assets/index-C9VCBPvj.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-B75IAiuZ.css">
   </head>
   <body>
     <div id="root">
