@@ -294,6 +294,19 @@ async function holdDay(request, env, n) {
   return answer(201);
 }
 
+/**
+ * POST /api/held-day/N with { key }: day N's held copy, still sealed, for gwctrivia.com/analytics only, whatever its date
+ * (Chris, 17 November 2026, of the page's On This Day card: "We have 365 days correct? Why not be able to scroll through
+ * all of them"). The counts key is the page's own (sealed under its password), so no player can ask; the copy stays
+ * sealed under the site's password, which the page already holds.
+ */
+async function serveHeldToAnalytics(request, env, n) {
+  const list = await heldList(request, env);
+  const body = list ? await storedDay(env, n, list.days[n]) : null;
+  if (!body) return answer(404);
+  return new Response(body, { headers: { "content-type": "application/octet-stream", "cache-control": "no-store" } });
+}
+
 /** GET /api/held-status: how many days the list holds, and how many of them are stored with the right hash. */
 async function heldStatus(request, env) {
   const list = await heldList(request, env);
@@ -356,6 +369,19 @@ export default {
     // gwctrivia.com/analytics (src/Analytics.tsx) with a slash after it would read its scripts from /analytics/assets/,
     // which do not exist; the page's one address is /analytics
     if (url.pathname.startsWith("/analytics/")) return Response.redirect(`${url.origin}/analytics`, 301);
+    const heldDayApi = url.pathname.match(/^\/api\/held-day\/(\d{1,4})$/);
+    if (heldDayApi) {
+      if (request.method !== "POST") return answer(405);
+      const origin = request.headers.get("origin");
+      if (origin && origin !== "https://gwctrivia.com") return answer(403);
+      if (!env.DB) return answer(503);
+      if (!(await holdsCountsKey(request))) return answer(403);
+      try {
+        return await serveHeldToAnalytics(request, env, Number(heldDayApi[1]));
+      } catch {
+        return answer(500);
+      }
+    }
     const dayApi = url.pathname.match(/^\/api\/day\/(\d{1,4})$/);
     if (dayApi || url.pathname === "/api/held-status") {
       const origin = request.headers.get("origin");
