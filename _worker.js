@@ -45,6 +45,13 @@
  * its hash is on the list, so nothing else can be stored, and nothing is ever read back before its day. The 4 a.m. job
  * (.github/workflows/daily-publish.yml) still copies each day onto the site too; either one is enough.
  *
+ * Once the game is open to everyone (scripts/open-site.sh, run only at Chris's word), the held days are plain JSON
+ * instead of sealed, and days/held.json says so ("open": true); they are still handed out only from their 4 a.m.
+ *
+ * POST /api/clear-counts with { key, before, clear } (scripts/clear-trial-counts.mjs; Chris, 17 November 2026, "how to
+ * clear analytics page"): how many rows of `daily`, `question_scores` and `score_bands` are dated before `before`, and,
+ * only when `clear` is true, removes them, so the analytics page starts at day 1. The counts key, as for /api/counts.
+ *
  * Read the totals in Cloudflare: Storage & databases → D1 SQL database → gwctrivia-counts → the `daily` table.
  *
  * Or at gwctrivia.com/analytics (src/AnalyticsDashboard.tsx; Chris, 11 November 2026: "Yes, build it", after asking for
@@ -264,8 +271,11 @@ async function serveHeld(request, env, n) {
   if (!list || n > dayNumber(list.firstDate)) return answer(404);
   const body = await storedDay(env, n, list.days[n]);
   if (!body) return answer(404);
-  return new Response(body, { headers: { "content-type": "application/octet-stream", "cache-control": "no-store" } });
+  return new Response(body, { headers: { "content-type": heldType(list), "cache-control": "no-store" } });
 }
+
+/** A held copy is sealed while the site is locked and plain JSON once it is open (days/held.json says which). */
+const heldType = (list) => (list?.open === true ? "application/json; charset=utf-8" : "application/octet-stream");
 
 /** POST /api/day/N with day N's sealed file: stored only when its hash is the one days/held.json names for day N. */
 async function holdDay(request, env, n) {
@@ -304,7 +314,7 @@ async function serveHeldToAnalytics(request, env, n) {
   const list = await heldList(request, env);
   const body = list ? await storedDay(env, n, list.days[n]) : null;
   if (!body) return answer(404);
-  return new Response(body, { headers: { "content-type": "application/octet-stream", "cache-control": "no-store" } });
+  return new Response(body, { headers: { "content-type": heldType(list), "cache-control": "no-store" } });
 }
 
 /** GET /api/held-status: how many days the list holds, and how many of them are stored with the right hash. */
@@ -327,21 +337,63 @@ async function heldStatus(request, env) {
 // SHA-256 of analytics-page.json's countsKey (see the note at the top)
 const COUNTS_KEY_SHA256 = "cbbca4b043666333ab300bec8a06b9564ee35e97905138a2ab4dcf829eabec7f";
 
-/** True when the note carries the counts key. Compares the key's hash, every character, whatever matches first. */
-async function holdsCountsKey(request) {
+/** The note, when it carries the counts key; null otherwise. Compares the key's hash, every character, whatever matches first. */
+async function countsNote(request) {
   try {
     const text = await request.text();
-    if (text.length > 200) return false;
-    const key = JSON.parse(text).key;
-    if (typeof key !== "string" || !/^[0-9a-f]{64}$/.test(key)) return false;
+    if (text.length > 200) return null;
+    const note = JSON.parse(text);
+    const key = note?.key;
+    if (typeof key !== "string" || !/^[0-9a-f]{64}$/.test(key)) return null;
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
     const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
     let differ = 0;
     for (let i = 0; i < hex.length; i++) differ |= hex.charCodeAt(i) ^ COUNTS_KEY_SHA256.charCodeAt(i);
-    return differ === 0;
+    return differ === 0 ? note : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** True when the note carries the counts key. */
+async function holdsCountsKey(request) {
+  return (await countsNote(request)) !== null;
+}
+
+// the tables whose rows are dated by game date (`date`), and so the ones the trial's counts sit in
+const COUNT_TABLES = ["daily", "question_scores", "score_bands"];
+
+/** POST /api/clear-counts: the rows dated before `before` in each counts table, removed only when `clear` is true. */
+async function clearCounts(env, note) {
+  const before = note.before;
+  if (typeof before !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(before) || Number.isNaN(Date.parse(before))) {
+    return answer(400);
+  }
+  const found = {};
+  const removed = {};
+  for (const table of COUNT_TABLES) {
+    try {
+      found[table] = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE date < ?1`).bind(before).first()).n;
+      if (note.clear === true) {
+        removed[table] = (await env.DB.prepare(`DELETE FROM ${table} WHERE date < ?1`).bind(before).run()).meta?.changes ?? 0;
+      }
+    } catch (e) {
+      if (!/no such table/i.test(String(e))) throw e;
+      found[table] = 0;
+    }
+  }
+  const left = {};
+  for (const table of COUNT_TABLES) {
+    try {
+      left[table] = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first()).n;
+    } catch (e) {
+      if (!/no such table/i.test(String(e))) throw e;
+      left[table] = 0;
+    }
+  }
+  return new Response(JSON.stringify({ before, cleared: note.clear === true, found, removed, left }), {
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
 }
 
 /** Every row of `daily`, oldest first, and the game's date today. No table yet: no rows. */
@@ -402,6 +454,19 @@ export default {
       if (!env.DB) return answer(503);
       try {
         return await todayStats(request, env, url);
+      } catch {
+        return answer(500);
+      }
+    }
+    if (url.pathname === "/api/clear-counts") {
+      if (request.method !== "POST") return answer(405);
+      const origin = request.headers.get("origin");
+      if (origin && origin !== "https://gwctrivia.com") return answer(403);
+      if (!env.DB) return answer(503);
+      const note = await countsNote(request);
+      if (!note) return answer(403);
+      try {
+        return await clearCounts(env, note);
       } catch {
         return answer(500);
       }
