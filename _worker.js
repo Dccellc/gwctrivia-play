@@ -27,6 +27,11 @@
  * may be today's or yesterday's game date only, and each answer is kept a minute (Cloudflare's cache), so a crowd
  * reading it asks the database about once a minute.
  *
+ * Since 19 November 2026 GET /api/alltime answers the same totals added up over every game date from day 1 on, for the
+ * stats the top left button opens (Chris: "the one from clicking on the top left button data from all time. So it's a
+ * bell curve with an average of every day combined with a dot for a player that has their own average for every day
+ * combined"); the results screen keeps today's. Totals only, like /api/today, and kept a minute.
+ *
  * Since 11 November 2026 it also counts the results screen's two buttons (Chris: "Track both buttons on analytics- copied
  * and share buttons"): game.ts countPress sends { button: "share" | "copy" } to /api/pressed, once a day for each from
  * each device, and this adds one to that day's `shared` or `copied`. The same day it began counting the On This Day tab
@@ -152,6 +157,52 @@ async function todayStats(request, env, url) {
     finished: day?.answers ?? 0,
     average: day?.answers ? Math.round(day.points / day.answers) : null,
     perfect: day?.perfect ?? 0,
+    questions: [1, 2, 3, 4, 5].map((q) => {
+      const r = byQ.get(q);
+      return r?.answers
+        ? { answers: r.answers, average: Math.round(r.points / r.answers), perfectShare: Math.round((100 * r.perfect) / r.answers) }
+        : { answers: 0, average: null, perfectShare: null };
+    }),
+    bands,
+  };
+  const res = new Response(JSON.stringify(body), {
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=60" },
+  });
+  if (cache) await cache.put(key, res.clone()).catch(() => {});
+  return res;
+}
+
+/** GET /api/alltime: everyone's totals over every game date from day 1 on, as JSON: games finished, the average total,
+ * perfect games, each question's average and share of 100s, and the bands, each added up over the days. */
+async function allTimeStats(request, env, url) {
+  const key = new Request(`${url.origin}/api/alltime`);
+  const cache = typeof caches !== "undefined" ? caches.default : null;
+  const hit = cache && (await cache.match(key).catch(() => null));
+  if (hit) return hit;
+  // from day 1's date, so a count taken in the trial before it never shows
+  const since = (await heldList(request, env))?.firstDate ?? "0000-00-00";
+  const rows = async (sql) => {
+    try {
+      return (await env.DB.prepare(sql).bind(since).all()).results ?? [];
+    } catch {
+      return [];
+    }
+  };
+  const qs = await rows(
+    `SELECT question, SUM(answers) AS answers, SUM(points) AS points, SUM(perfect) AS perfect,
+            COUNT(DISTINCT date) AS days FROM question_scores WHERE date >= ?1 GROUP BY question`,
+  );
+  const bandRows = await rows("SELECT band, SUM(players) AS players FROM score_bands WHERE date >= ?1 GROUP BY band");
+  const byQ = new Map(qs.map((r) => [r.question, r]));
+  const all = byQ.get(0);
+  const bands = Array(BANDS).fill(0);
+  for (const r of bandRows) if (r.band >= 0 && r.band < BANDS) bands[r.band] = r.players;
+  const body = {
+    since,
+    days: all?.days ?? 0,
+    finished: all?.answers ?? 0,
+    average: all?.answers ? Math.round(all.points / all.answers) : null,
+    perfect: all?.perfect ?? 0,
     questions: [1, 2, 3, 4, 5].map((q) => {
       const r = byQ.get(q);
       return r?.answers
@@ -449,11 +500,11 @@ export default {
       }
       return request.method === "POST" ? holdDay(request, env, Number(dayApi[1])) : answer(405);
     }
-    if (url.pathname === "/api/today") {
+    if (url.pathname === "/api/today" || url.pathname === "/api/alltime") {
       if (request.method !== "GET") return answer(405);
       if (!env.DB) return answer(503);
       try {
-        return await todayStats(request, env, url);
+        return await (url.pathname === "/api/today" ? todayStats : allTimeStats)(request, env, url);
       } catch {
         return answer(500);
       }
