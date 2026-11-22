@@ -447,7 +447,7 @@ async function clearCounts(env, note) {
   });
 }
 
-/** Every row of `daily`, oldest first, and the game's date today. No table yet: no rows. */
+/** Every row of `daily`, oldest first, the scores and score bands, and the game's date today. No table yet: no rows. */
 async function readCounts(env) {
   let rows = [];
   try {
@@ -461,7 +461,15 @@ async function readCounts(env) {
   } catch (e) {
     if (!/no such table/i.test(String(e))) throw e;
   }
-  return new Response(JSON.stringify({ today: gameDate(), rows, scores }), {
+  // each day's totals in bands of 50 points, for the results picture's bell curve (AnalyticsDashboard.tsx ScoresCard;
+  // Chris, 22 November 2026: the daily Story's "yesterday's results from the game with bell curve and average")
+  let bands = [];
+  try {
+    bands = (await env.DB.prepare("SELECT date, band, players FROM score_bands ORDER BY date, band").all()).results ?? [];
+  } catch (e) {
+    if (!/no such table/i.test(String(e))) throw e;
+  }
+  return new Response(JSON.stringify({ today: gameDate(), rows, scores, bands }), {
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
 }
