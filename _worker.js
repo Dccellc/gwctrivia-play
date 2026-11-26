@@ -389,10 +389,10 @@ async function heldStatus(request, env) {
 const COUNTS_KEY_SHA256 = "cbbca4b043666333ab300bec8a06b9564ee35e97905138a2ab4dcf829eabec7f";
 
 /** The note, when it carries the counts key; null otherwise. Compares the key's hash, every character, whatever matches first. */
-async function countsNote(request) {
+async function countsNote(request, longest = 200) {
   try {
     const text = await request.text();
-    if (text.length > 200) return null;
+    if (text.length > longest) return null;
     const note = JSON.parse(text);
     const key = note?.key;
     if (typeof key !== "string" || !/^[0-9a-f]{64}$/.test(key)) return null;
@@ -409,6 +409,47 @@ async function countsNote(request) {
 /** True when the note carries the counts key. */
 async function holdsCountsKey(request) {
   return (await countsNote(request)) !== null;
+}
+
+/*
+ * POST /api/posted (Chris, 26 November 2026: "for each section, by the numbers, trivia carousels etc, I need a small box
+ * that I can check off after I have posted it ... If I uncheck it it will allow me to post it again"): the analytics
+ * page's Posted boxes, kept here so a box checked on his phone shows checked on his computer too. { key } reads them;
+ * { key, id, posted, at } checks one (posted true, `at` the day he posted it, YYYY-MM-DD) or unchecks it (posted false).
+ * The counts key, as for /api/counts. The answer is always every checked box, { posted: { id: at } }.
+ */
+const POSTED_SCHEMA = `CREATE TABLE IF NOT EXISTS posted (id TEXT PRIMARY KEY, at TEXT NOT NULL)`;
+// a post's id as the page makes it: its kind, then its name (letters, digits and a few marks; never SQL, which is bound)
+const POSTED_ID = /^[A-Za-z0-9:|._' &,!?()-]{1,200}$/;
+
+async function postedList(env) {
+  let rows = [];
+  try {
+    rows = (await env.DB.prepare("SELECT id, at FROM posted").all()).results ?? [];
+  } catch (e) {
+    if (!/no such table/i.test(String(e))) throw e;
+  }
+  return new Response(JSON.stringify({ posted: Object.fromEntries(rows.map((r) => [r.id, r.at])) }), {
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
+}
+
+async function setPosted(env, note) {
+  if ("id" in note) {
+    if (typeof note.id !== "string" || !POSTED_ID.test(note.id) || typeof note.posted !== "boolean") return answer(400);
+    const at = typeof note.at === "string" && /^\d{4}-\d{2}-\d{2}$/.test(note.at) ? note.at : gameDate();
+    const write = note.posted
+      ? env.DB.prepare("INSERT OR REPLACE INTO posted (id, at) VALUES (?1, ?2)").bind(note.id, at)
+      : env.DB.prepare("DELETE FROM posted WHERE id = ?1").bind(note.id);
+    try {
+      await write.run();
+    } catch (e) {
+      if (!/no such table/i.test(String(e))) throw e;
+      await env.DB.prepare(POSTED_SCHEMA).run();
+      await write.run();
+    }
+  }
+  return postedList(env);
 }
 
 // the tables whose rows are dated by game date (`date`), and so the ones the trial's counts sit in
@@ -513,6 +554,19 @@ export default {
       if (!env.DB) return answer(503);
       try {
         return await (url.pathname === "/api/today" ? todayStats : allTimeStats)(request, env, url);
+      } catch {
+        return answer(500);
+      }
+    }
+    if (url.pathname === "/api/posted") {
+      if (request.method !== "POST") return answer(405);
+      const origin = request.headers.get("origin");
+      if (origin && origin !== "https://gwctrivia.com") return answer(403);
+      if (!env.DB) return answer(503);
+      const note = await countsNote(request, 600);
+      if (!note) return answer(403);
+      try {
+        return await setPosted(env, note);
       } catch {
         return answer(500);
       }
