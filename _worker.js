@@ -2,7 +2,7 @@
  * gwctrivia.com's daily count (Chris, 10 November 2026: "i want to know daily players and returning players").
  *
  * Cloudflare Pages runs this file for /api/* and /analytics/* (_routes.json beside it), and since 27 November 2026 for the
- * page itself, "/", for the score link (scorePage, below); every other file, the day
+ * page itself, "/", and a score link's card picture, "/card/*" (scorePage and cardImage, below); every other file, the day
  * files included, is served as it is. Since 17 November 2026 the day files no longer come through here (Chris, asking
  * whether the site is ready for thousands of players at once): the free plan allows this file 100,000 requests a day,
  * about 10,000 players, and past that the game could not have loaded its day. A plain file has no such limit.
@@ -520,30 +520,31 @@ async function readCounts(env) {
 /**
  * The score link (Chris, 27 November 2026: "Can we build it so that the score and the link goes to the recipient of the
  * text from either route but nothing changes in the game"). While a finished day's results are on the screen, the game
- * puts the date and the five scores in the page's address, gwctrivia.com/?s=2026-11-27-100-10-80-10-81, and in its
- * title (site/src/scoreLink.ts), so Safari's own Share button sends the score. Here the page itself answers such a link
- * with the same title and card title, for any app that reads the link on its own: "November 27 · Final score: 543 ·
- * 100🏁 10🟥 80🟩 10🟥 81🟩", worked out exactly as scoreLinkTitle does. The plain title and address stay on the two
- * tags as data-plain, which the game puts back before it starts; the game never reads the scores. Since that day
- * _routes.json sends "/" through this file too (gwctrivia.com is on Cloudflare's paid plan: Chris, the same day, "I have
- * the paid version of cloudflare"). A page with no ?s=, one this cannot read, and any error here get index.html exactly
- * as before.
+ * puts the date and the five scores in the page's address, gwctrivia.com/?s=2026-11-27-100-45-80-10-62, and both Share
+ * buttons send that link (site/src/scoreLink.ts). Here the page answers such a link with a title of its own, "November
+ * 27 · Final score: 521", worked out exactly as scoreLinkTitle does, and a picture of its own: the card picture
+ * (cardImage, below), with each question's racing flag in its true color. The plain title, address and picture stay on
+ * the tags as data-plain, which the game puts back before it starts; the game never reads the scores. Since that day
+ * _routes.json sends "/" and "/card/*" through this file (gwctrivia.com is on Cloudflare's paid plan: Chris, the same
+ * day, "I have the paid version of cloudflare"). A page with no ?s=, one this cannot read, and any error here get
+ * index.html exactly as before.
  */
 const SCORE_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const SCORE_WEIGHTS = [1, 1, 2, 3, 3]; // site/src/game.ts WEIGHTS
+const CARD_ORIGIN = "https://gwctrivia.com";
 
-/** site/src/game.ts scoreEmoji, the flag a score earns. */
-function scoreFlagEmoji(s) {
-  if (s >= 100) return "🏁";
-  if (s >= 80) return "🟩";
-  if (s >= 60) return "🏳️";
-  if (s >= 40) return "🟨";
-  if (s >= 20) return "🏴";
-  return "🟥";
+/** site/src/game.ts scoreFlag, the flag a score earns. */
+function scoreFlagName(s) {
+  if (s >= 100) return "checkered";
+  if (s >= 80) return "green";
+  if (s >= 60) return "white";
+  if (s >= 40) return "yellow";
+  if (s >= 20) return "black";
+  return "red";
 }
 
-/** The title for ?s=YYYY-MM-DD-a-b-c-d-e, five scores of 0 to 100; null when the link is anything else. */
-function scoreLinkTitle(param) {
+/** YYYY-MM-DD-a-b-c-d-e, five scores of 0 to 100, read; null when it is anything else. */
+function readScoreParam(param) {
   const m = /^(\d{4})-(\d{2})-(\d{2})((?:-\d{1,3}){5})$/.exec(param || "");
   if (!m) return null;
   const month = Number(m[2]);
@@ -552,24 +553,213 @@ function scoreLinkTitle(param) {
   const scores = m[4].slice(1).split("-").map(Number);
   if (scores.some((s) => s > 100)) return null;
   const total = scores.reduce((t, s, i) => t + s * SCORE_WEIGHTS[i], 0);
-  const flags = scores.map((s) => `${s}${scoreFlagEmoji(s)}`).join(" ");
-  return `${SCORE_MONTHS[month - 1]} ${day} · Final score: ${total.toLocaleString("en-US")} · ${flags}`;
+  return { param, month, day, scores, total };
 }
 
-/** gwctrivia.com/?s=…: the page, its title and card title saying the score. */
+/** site/src/scoreLink.ts scoreLinkTitle. */
+function scoreLinkTitle(p) {
+  return `${SCORE_MONTHS[p.month - 1]} ${p.day} · Final score: ${p.total.toLocaleString("en-US")}`;
+}
+
+/** site/src/scoreLink.ts scoreCardAlt: the card picture, said in words. */
+function scoreCardAlt(p) {
+  const times = ["", "", ", counts twice", ", counts three times"];
+  const qs = p.scores.map((s, i) => `question ${i + 1}, ${s}, ${scoreFlagName(s)} flag${times[SCORE_WEIGHTS[i]]}`);
+  return `${SCORE_MONTHS[p.month - 1]} ${p.day}, final score ${p.total.toLocaleString("en-US")} of 1,000: ${qs.join("; ")}.`;
+}
+
+/** gwctrivia.com/?s=…: the page, its title and card picture saying the score. */
 async function scorePage(request, env, url) {
   const page = await env.ASSETS.fetch(request);
-  const title = scoreLinkTitle(url.searchParams.get("s"));
-  if (!title || !page.ok || !(page.headers.get("content-type") || "").includes("text/html")) return page;
-  const plain = (e) => e.setAttribute("data-plain", e.getAttribute("content") || "");
+  const p = readScoreParam(url.searchParams.get("s"));
+  if (!p || !page.ok || !(page.headers.get("content-type") || "").includes("text/html")) return page;
+  const title = scoreLinkTitle(p);
+  const to = (value) => ({
+    element(e) {
+      e.setAttribute("data-plain", e.getAttribute("content") || "");
+      e.setAttribute("content", value);
+    },
+  });
   const out = new HTMLRewriter()
     .on("title", { element: (e) => void e.setInnerContent(title) })
-    .on('meta[property="og:title"]', { element: (e) => void (plain(e), e.setAttribute("content", title)) })
-    .on('meta[property="og:url"]', { element: (e) => void (plain(e), e.setAttribute("content", url.href)) })
+    .on('meta[property="og:title"]', to(title))
+    .on('meta[property="og:url"]', to(url.href))
+    .on('meta[property="og:image"]', to(`${CARD_ORIGIN}/card/${p.param}.png`))
+    .on('meta[property="og:image:width"]', to("1200"))
+    .on('meta[property="og:image:height"]', to("630"))
+    .on('meta[property="og:image:alt"]', to(scoreCardAlt(p)))
+    .on('meta[name="twitter:card"]', to("summary_large_image"))
     .transform(page);
   const res = new Response(out.body, out);
   res.headers.delete("etag");
   return res;
+}
+
+/**
+ * The card picture of a score link, gwctrivia.com/card/2026-11-27-100-45-80-10-62.png, 1200 × 630 (Chris, 27 November
+ * 2026, on the mockup of the card with real flags: "Ok can you make that change"): the checkered band, the logo, the
+ * date and the total, and the five questions, each with its racing flag in its true color, its score and its weight.
+ * Emoji has no green or yellow flag, so a picture is the one place the real flags can travel with the link, and a
+ * picture shows the same on every phone. This file cannot draw, so site/scripts/card-pieces.mjs draws the pieces once
+ * (public/card-pieces.json, each deflated RGBA) and this copies them into place and writes the PNG. A picture is the
+ * same for the same link, so Cloudflare keeps each one; if anything here fails, the logo is answered instead.
+ */
+let cardPieces = null;
+
+async function inflate(b64) {
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+function loadCardPieces(env, origin) {
+  cardPieces ??= (async () => {
+    const r = await env.ASSETS.fetch(new Request(`${origin}/card-pieces.json`));
+    if (!r.ok) throw new Error(`card-pieces.json: ${r.status}`);
+    const j = await r.json();
+    const piece = async (p) => ({ ...p, rgba: await inflate(p.data) });
+    const each = async (o) => Object.fromEntries(await Promise.all(Object.entries(o).map(async ([k, p]) => [k, await piece(p)])));
+    return {
+      size: j.size,
+      panels: j.panels,
+      background: await piece(j.background),
+      flags: await each(j.flags),
+      date: { ...j.date, glyphs: await each(j.date.glyphs) },
+      total: { ...j.total, glyphs: await each(j.total.glyphs) },
+      outOf: await piece(j.outOf),
+      score: { ...j.score, glyphs: await each(j.score.glyphs) },
+    };
+  })().catch((e) => {
+    cardPieces = null;
+    throw e;
+  });
+  return cardPieces;
+}
+
+/** A piece laid over the picture at (x, y), its edges blended. */
+function blit(img, W, H, p, x, y) {
+  x = Math.round(x);
+  y = Math.round(y);
+  for (let j = 0; j < p.h; j++) {
+    const ty = y + j;
+    if (ty < 0 || ty >= H) continue;
+    for (let i = 0; i < p.w; i++) {
+      const tx = x + i;
+      if (tx < 0 || tx >= W) continue;
+      const s = (j * p.w + i) * 4;
+      const a = p.rgba[s + 3];
+      if (!a) continue;
+      const d = (ty * W + tx) * 4;
+      for (let c = 0; c < 3; c++) img[d + c] = a === 255 ? p.rgba[s + c] : Math.round(img[d + c] + ((p.rgba[s + c] - img[d + c]) * a) / 255);
+    }
+  }
+}
+
+function textWidth(set, s, spacing = 0) {
+  let w = 0;
+  for (const ch of s) w += (ch === " " ? set.space : set.glyphs[ch].adv) + spacing;
+  return w - spacing;
+}
+
+/** Text from (x, baseline y); where its pen stopped. */
+function drawText(img, W, H, set, s, x, y, spacing = 0) {
+  let pen = x;
+  for (const ch of s) {
+    if (ch === " ") {
+      pen += set.space + spacing;
+      continue;
+    }
+    const g = set.glyphs[ch];
+    blit(img, W, H, g, pen + g.dx, y + g.dy);
+    pen += g.adv + spacing;
+  }
+  return pen - spacing;
+}
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function pngChunk(type, data) {
+  const out = new Uint8Array(12 + data.length);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, data.length);
+  for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
+  out.set(data, 8);
+  let crc = 0xffffffff;
+  for (let i = 4; i < 8 + data.length; i++) crc = CRC_TABLE[(crc ^ out[i]) & 255] ^ (crc >>> 8);
+  view.setUint32(8 + data.length, (crc ^ 0xffffffff) >>> 0);
+  return out;
+}
+
+/** The picture as a PNG: RGB, each row filtered by the pixel to its left, deflated by the runtime's own zlib. */
+async function encodePng(img, W, H) {
+  const stride = 1 + W * 3;
+  const raw = new Uint8Array(H * stride);
+  for (let y = 0; y < H; y++) {
+    raw[y * stride] = 1;
+    for (let x = 0; x < W; x++) {
+      const s = (y * W + x) * 4;
+      const d = y * stride + 1 + x * 3;
+      for (let c = 0; c < 3; c++) raw[d + c] = (img[s + c] - (x ? img[s - 4 + c] : 0)) & 255;
+    }
+  }
+  const idat = new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new CompressionStream("deflate"))).arrayBuffer());
+  const ihdr = new Uint8Array(13);
+  const v = new DataView(ihdr.buffer);
+  v.setUint32(0, W);
+  v.setUint32(4, H);
+  ihdr.set([8, 2, 0, 0, 0], 8);
+  const parts = [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), pngChunk("IHDR", ihdr), pngChunk("IDAT", idat), pngChunk("IEND", new Uint8Array(0))];
+  const png = new Uint8Array(parts.reduce((n, part) => n + part.length, 0));
+  let at = 0;
+  for (const part of parts) {
+    png.set(part, at);
+    at += part.length;
+  }
+  return png;
+}
+
+async function cardImage(env, origin, p) {
+  const k = await loadCardPieces(env, origin);
+  const { w: W, h: H } = k.size;
+  const img = k.background.rgba.slice();
+  drawText(img, W, H, k.date, `${SCORE_MONTHS[p.month - 1].toUpperCase()} ${p.day}`, 296, 118, k.date.spacing);
+  const end = drawText(img, W, H, k.total, p.total.toLocaleString("en-US"), 292, 228);
+  blit(img, W, H, k.outOf, end + 10 + k.outOf.dx, 228 + k.outOf.dy);
+  const P = k.panels;
+  p.scores.forEach((s, i) => {
+    const x = P.x + i * (P.w + P.gap);
+    blit(img, W, H, k.flags[scoreFlagName(s)], x + (P.w - 130) / 2 + 8, P.y + 52);
+    const text = String(s);
+    drawText(img, W, H, k.score, text, x + P.w / 2 - textWidth(k.score, text) / 2, P.y + 236);
+  });
+  return encodePng(img, W, H);
+}
+
+/** gwctrivia.com/card/<score link>.png */
+async function cardResponse(request, env, url, param) {
+  if (!["GET", "HEAD"].includes(request.method)) return answer(405);
+  const p = readScoreParam(param);
+  if (!p) return new Response("Not found", { status: 404 });
+  const cache = caches.default;
+  const kept = await cache.match(request);
+  if (kept) return kept;
+  try {
+    const res = new Response(await cardImage(env, url.origin, p), {
+      headers: { "content-type": "image/png", "cache-control": "public, max-age=31536000, immutable" },
+    });
+    if (request.method === "GET") await cache.put(request, res.clone());
+    return res;
+  } catch {
+    return env.ASSETS.fetch(new Request(`${url.origin}/logo.jpg`));
+  }
 }
 
 export default {
@@ -584,6 +774,9 @@ export default {
         return env.ASSETS.fetch(request);
       }
     }
+    // a score link's card picture (cardImage)
+    const card = url.pathname.match(/^\/card\/([0-9-]+)\.png$/);
+    if (card) return cardResponse(request, env, url, card[1]);
     // gwctrivia.com/analytics (src/Analytics.tsx) with a slash after it would read its scripts from /analytics/assets/,
     // which do not exist; the page's one address is /analytics
     if (url.pathname.startsWith("/analytics/")) return Response.redirect(`${url.origin}/analytics`, 301);
