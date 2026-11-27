@@ -532,6 +532,8 @@ async function readCounts(env) {
 const SCORE_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const SCORE_WEIGHTS = [1, 1, 2, 3, 3]; // site/src/game.ts WEIGHTS
 const CARD_ORIGIN = "https://gwctrivia.com";
+// the card picture's design, in its address, so a picture Cloudflare kept from an older design is never reused
+const CARD_DESIGN = 2;
 
 /** site/src/game.ts scoreFlag, the flag a score earns. */
 function scoreFlagName(s) {
@@ -584,7 +586,7 @@ async function scorePage(request, env, url) {
     .on("title", { element: (e) => void e.setInnerContent(title) })
     .on('meta[property="og:title"]', to(title))
     .on('meta[property="og:url"]', to(url.href))
-    .on('meta[property="og:image"]', to(`${CARD_ORIGIN}/card/${p.param}.png`))
+    .on('meta[property="og:image"]', to(`${CARD_ORIGIN}/card/${p.param}.png?v=${CARD_DESIGN}`))
     .on('meta[property="og:image:width"]', to("1200"))
     .on('meta[property="og:image:height"]', to("630"))
     .on('meta[property="og:image:alt"]', to(scoreCardAlt(p)))
