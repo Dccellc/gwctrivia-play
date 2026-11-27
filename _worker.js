@@ -1,10 +1,12 @@
 /**
  * gwctrivia.com's daily count (Chris, 10 November 2026: "i want to know daily players and returning players").
  *
- * Cloudflare Pages runs this file for /api/* and /analytics/* only (_routes.json beside it); every other file, the day
+ * Cloudflare Pages runs this file for /api/* and /analytics/* (_routes.json beside it), and since 27 November 2026 for the
+ * page itself, "/", for the score link (scorePage, below); every other file, the day
  * files included, is served as it is. Since 17 November 2026 the day files no longer come through here (Chris, asking
  * whether the site is ready for thousands of players at once): the free plan allows this file 100,000 requests a day,
  * about 10,000 players, and past that the game could not have loaded its day. A plain file has no such limit.
+ * (gwctrivia.com is on Cloudflare's paid plan: Chris, 27 November 2026, "I have the paid version of cloudflare".)
  * scripts/publish-test.sh copies both files into the live branch, never into the test copy.
  *
  * The game sends one note a day from each device, on its first answer (site/src/game.ts countPlay): how long since that
@@ -515,9 +517,73 @@ async function readCounts(env) {
   });
 }
 
+/**
+ * The score link (Chris, 27 November 2026: "Can we build it so that the score and the link goes to the recipient of the
+ * text from either route but nothing changes in the game"). While a finished day's results are on the screen, the game
+ * puts the date and the five scores in the page's address, gwctrivia.com/?s=2026-11-27-100-10-80-10-81, and in its
+ * title (site/src/scoreLink.ts), so Safari's own Share button sends the score. Here the page itself answers such a link
+ * with the same title and card title, for any app that reads the link on its own: "November 27 · Final score: 543 ·
+ * 100🏁 10🟥 80🟩 10🟥 81🟩", worked out exactly as scoreLinkTitle does. The plain title and address stay on the two
+ * tags as data-plain, which the game puts back before it starts; the game never reads the scores. Since that day
+ * _routes.json sends "/" through this file too (gwctrivia.com is on Cloudflare's paid plan: Chris, the same day, "I have
+ * the paid version of cloudflare"). A page with no ?s=, one this cannot read, and any error here get index.html exactly
+ * as before.
+ */
+const SCORE_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const SCORE_WEIGHTS = [1, 1, 2, 3, 3]; // site/src/game.ts WEIGHTS
+
+/** site/src/game.ts scoreEmoji, the flag a score earns. */
+function scoreFlagEmoji(s) {
+  if (s >= 100) return "🏁";
+  if (s >= 80) return "🟩";
+  if (s >= 60) return "🏳️";
+  if (s >= 40) return "🟨";
+  if (s >= 20) return "🏴";
+  return "🟥";
+}
+
+/** The title for ?s=YYYY-MM-DD-a-b-c-d-e, five scores of 0 to 100; null when the link is anything else. */
+function scoreLinkTitle(param) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})((?:-\d{1,3}){5})$/.exec(param || "");
+  if (!m) return null;
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const scores = m[4].slice(1).split("-").map(Number);
+  if (scores.some((s) => s > 100)) return null;
+  const total = scores.reduce((t, s, i) => t + s * SCORE_WEIGHTS[i], 0);
+  const flags = scores.map((s) => `${s}${scoreFlagEmoji(s)}`).join(" ");
+  return `${SCORE_MONTHS[month - 1]} ${day} · Final score: ${total.toLocaleString("en-US")} · ${flags}`;
+}
+
+/** gwctrivia.com/?s=…: the page, its title and card title saying the score. */
+async function scorePage(request, env, url) {
+  const page = await env.ASSETS.fetch(request);
+  const title = scoreLinkTitle(url.searchParams.get("s"));
+  if (!title || !page.ok || !(page.headers.get("content-type") || "").includes("text/html")) return page;
+  const plain = (e) => e.setAttribute("data-plain", e.getAttribute("content") || "");
+  const out = new HTMLRewriter()
+    .on("title", { element: (e) => void e.setInnerContent(title) })
+    .on('meta[property="og:title"]', { element: (e) => void (plain(e), e.setAttribute("content", title)) })
+    .on('meta[property="og:url"]', { element: (e) => void (plain(e), e.setAttribute("content", url.href)) })
+    .transform(page);
+  const res = new Response(out.body, out);
+  res.headers.delete("etag");
+  return res;
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    // the page itself, only so a score link's card says the score (scorePage); everything else is index.html as before
+    if (url.pathname === "/") {
+      if (!url.searchParams.has("s") || !["GET", "HEAD"].includes(request.method)) return env.ASSETS.fetch(request);
+      try {
+        return await scorePage(request, env, url);
+      } catch {
+        return env.ASSETS.fetch(request);
+      }
+    }
     // gwctrivia.com/analytics (src/Analytics.tsx) with a slash after it would read its scripts from /analytics/assets/,
     // which do not exist; the page's one address is /analytics
     if (url.pathname.startsWith("/analytics/")) return Response.redirect(`${url.origin}/analytics`, 301);
